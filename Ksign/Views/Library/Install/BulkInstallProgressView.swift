@@ -15,7 +15,7 @@ struct BulkInstallProgressView: View {
     @StateObject var viewModel = InstallerStatusViewModel()
     
     @AppStorage("Feather.installationMethod") private var _installationMethod: Int = 0
-    @AppStorage("Feather.serverMethod") private var _serverMethod: Int = 1
+    @AppStorage("Feather.serverMethod") private var _serverMethod: Int = 0
     @StateObject var installer: ServerInstaller
     @State private var _isWebviewPresenting = false
     @State private var progressTask: Task<Void, Never>?
@@ -25,7 +25,7 @@ struct BulkInstallProgressView: View {
         let method = UserDefaults.standard.integer(forKey: "Feather.installationMethod")
         let viewModel = InstallerStatusViewModel(isIdevice: method == 1)
         self._viewModel = StateObject(wrappedValue: viewModel)
-        self._installer = StateObject(wrappedValue: try! ServerInstaller(app: app, viewModel: viewModel))
+        self._installer = StateObject(wrappedValue: ServerInstaller(app: app, viewModel: viewModel))
     }
     
     var body: some View {
@@ -36,9 +36,21 @@ struct BulkInstallProgressView: View {
             SafariRepresentableView(url: installer.pageEndpoint).ignoresSafeArea()
         }
         .onReceive(viewModel.$status) { newStatus in
-            if case .ready = newStatus {
-                if _serverMethod == 0 {
-                    UIApplication.shared.open(URL(string: installer.iTunesLink)!)
+            if case .ready = newStatus, _installationMethod == 0 {
+                if let error = installer.startupError {
+                    LocalInstallerDiagnostics.shared.record(error: "Install aborted: \(error.localizedDescription)")
+                    UIAlertController.showAlertWithOk(
+                        title: .localized("Install"),
+                        message: "The local installer server could not start: \(error.localizedDescription)\n\nSee Settings > Installation > Local Installer Diagnostics."
+                    )
+                } else if _serverMethod == 0 {
+                    installer.handOffToiOS { message in
+                        UIAlertController.showAlertWithOk(title: .localized("Install"), message: message)
+                    }
+                    // Fall back to the local install page (user-tappable Install button) if iOS did not react.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                        if installer.didRequestHandoff, case .ready = viewModel.status { _isWebviewPresenting = true }
+                    }
                 } else if _serverMethod == 1 {
                     _isWebviewPresenting = true
                 }
@@ -53,8 +65,11 @@ struct BulkInstallProgressView: View {
                 }
             }
             
-            if case .sendingPayload = newStatus, _serverMethod == 1 {
+            switch newStatus {
+            case .sendingManifest, .sendingPayload:
                 _isWebviewPresenting = false
+            default:
+                break
             }
             
             switch newStatus {

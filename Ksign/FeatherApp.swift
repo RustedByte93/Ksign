@@ -91,13 +91,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         _clean()
         
-        _copyServerCertificates()
+        // TLS material is NOT copied or downloaded at launch any more: LocalTLSIdentity loads and
+        // validates it in place (see LocalTLSIdentity.swift), so a good certificate is never overwritten.
         _addDefaultCertificates()
-
-#if SERVER
-        // fallback just in case xd
-        _downloadSSLCertificates()
-#endif
         return true
     }
     
@@ -154,32 +150,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         }
     }
     
-    private func _copyServerCertificates() {
-        let fileManager = FileManager.default
-        let serverDirectory = URL.documentsDirectory.appendingPathComponent("App/Server")
-        
-        try? fileManager.createDirectoryIfNeeded(at: serverDirectory)
-        
-        let filesToCopy = ["server.crt", "server.pem", "commonName.txt"]
-        
-        for fileName in filesToCopy {
-            guard let bundleURL = Bundle.main.url(forResource: fileName.components(separatedBy: ".").first!, withExtension: fileName.components(separatedBy: ".").last!) else {
-                print("File \(fileName) not found in app bundle")
-                continue
-            }
-            
-            let destinationURL = serverDirectory.appendingPathComponent(fileName)
-            
-            try? fileManager.removeItem(at: destinationURL)
-            
-            do {
-                try fileManager.copyItem(at: bundleURL, to: destinationURL)
-            } catch {
-                print("Error copying \(fileName): \(error)")
-            }
-        }
-    }
-    
     private func _addDefaultCertificates() {
             guard
                 UserDefaults.standard.bool(forKey: "feather.didImportDefaultCertificates") == false,
@@ -230,17 +200,4 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             }
         }
 
-#if SERVER
-    private func _downloadSSLCertificates() {
-        let serverURL = "https://backloop.dev/pack.json"
-        
-        FR.downloadSSLCertificates(from: serverURL) { success in
-            if success {
-                print("SSL certificates downloaded successfully")
-            } else {
-                print("Failed to download SSL certificates")
-            }
-        }
-    }
-#endif
 }

@@ -1,0 +1,135 @@
+name: Build IPA (local HTTPS installer)
+
+# Builds an UNSIGNED (ad-hoc) Ksign IPA whose local HTTPS server uses a private, name-constrained CA
+# (Scripts/make-local-pki.sh). No personal signing certificates are used or committed.
+# The IPA must be signed with your own Apple certificate before it can be installed.
+#
+# CA key handling:
+#  * Recommended: store the CA in repository secrets so every build is a RENEWAL under the same CA and the
+#    phone keeps trusting it:   KSIGN_CA_CERT_B64 (ca.crt, base64)   KSIGN_CA_KEY_B64 (ca.key, base64)
+#    Generate them once locally with Scripts/make-local-pki.sh, then:  base64 < ~/.ksign-pki/ca.key
+#  * Without secrets the build creates a throw-away CA and DESTROYS its key; every build then needs a new
+#    CA profile on the phone. The CA key is never uploaded as an artifact and never enters the IPA.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "Ksign/**"
+      - "makefile"
+      - "Scripts/**"
+      - "Tests/LocalInstaller/**"
+      - ".github/workflows/build-local-tls-ipa.yml"
+
+jobs:
+  test:
+    name: Local installer tests (macOS)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Show toolchain
+        run: |
+          swift --version
+          openssl version
+      - name: Swift tests (streaming, range, TLS handshake, certificate analysis)
+        working-directory: Tests/LocalInstaller
+        env:
+          KSIGN_SKIP_LARGE: "1"   # 250/500 MB cases run locally; set to 0 to run them here as well
+        run: swift test
+
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-26
+    needs: test
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          openssl version
+
+      - name: Prepare PKI (existing CA from secrets, else ephemeral)
+        env:
+          CA_CERT_B64: ${{ secrets.KSIGN_CA_CERT_B64 }}
+          CA_KEY_B64: ${{ secrets.KSIGN_CA_KEY_B64 }}
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/pki" && chmod 700 "$RUNNER_TEMP/pki"
+          if [ -n "${CA_CERT_B64:-}" ] && [ -n "${CA_KEY_B64:-}" ]; then
+            printf '%s' "$CA_CERT_B64" | base64 -d > "$RUNNER_TEMP/pki/ca.crt"
+            printf '%s' "$CA_KEY_B64" | base64 -d > "$RUNNER_TEMP/pki/ca.key"
+            chmod 600 "$RUNNER_TEMP/pki/ca.key"
+            echo "KSIGN_CA_CERT=$RUNNER_TEMP/pki/ca.crt" >> "$GITHUB_ENV"
+            echo "KSIGN_CA_KEY=$RUNNER_TEMP/pki/ca.key" >> "$GITHUB_ENV"
+            echo "Using the CA from repository secrets (renewal)."
+          else
+            echo "::warning::No CA secrets configured: using an ephemeral CA. The phone must trust the new CA from this build's artifact."
+            echo "KSIGN_PKI_MODE=ephemeral" >> "$GITHUB_ENV"
+          fi
+
+      - name: Generate and verify TLS material
+        run: |
+          set -eu
+          if [ "${KSIGN_PKI_MODE:-}" = "ephemeral" ]; then
+            sh Scripts/make-local-pki.sh --out deps --ephemeral
+          else
+            sh Scripts/make-local-pki.sh --out deps
+          fi
+          ls deps
+
+      - name: Build
+        run: make
+
+      - name: Verify IPA contents
+        run: |
+          set -eu
+          rm -rf verify && mkdir verify
+          unzip -q packages/Ksign.ipa -d verify
+          APP="$(echo verify/Payload/*.app)"
+          for f in server.crt server.pem commonName.txt KsignLocalCA.crt KsignLocalCA.mobileconfig; do test -f "$APP/$f"; done
+          # No CA private key may be in the app. server.pem is the LEAF key; it must not equal the CA key.
+          if find "$APP" -iname 'ca.key' | grep .; then echo "CA key found in app" >&2; exit 1; fi
+          openssl verify -CAfile "$APP/KsignLocalCA.crt" -purpose sslserver -verify_hostname ksign.backloop.dev "$APP/server.crt"
+          openssl x509 -in "$APP/server.crt" -noout -checkend 0
+          START="$(date -j -f '%b %e %T %Y %Z' "$(openssl x509 -in "$APP/server.crt" -noout -startdate | cut -d= -f2)" +%s)"
+          END="$(date -j -f '%b %e %T %Y %Z' "$(openssl x509 -in "$APP/server.crt" -noout -enddate | cut -d= -f2)" +%s)"
+          echo "Leaf validity: $(( (END - START) / 86400 )) days"
+          test $(( (END - START) / 86400 )) -le 825
+          CERT_PUB="$(openssl x509 -in "$APP/server.crt" -noout -pubkey | openssl sha256)"
+          KEY_PUB="$(openssl pkey -in "$APP/server.pem" -pubout | openssl sha256)"
+          test "$CERT_PUB" = "$KEY_PUB"
+          grep -qx "ksign.backloop.dev" "$APP/commonName.txt"
+          plutil -lint "$APP/KsignLocalCA.mobileconfig"
+          # The revoked legacy endpoints must not be referenced by the binary.
+          if strings "$APP/Ksign" | grep -E "backloop\.dev/(pack\.json|backloop\.dev-|public/pack)"; then
+            echo "Legacy backloop.dev endpoint still referenced" >&2
+            exit 1
+          fi
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ksign-unsigned-ipa
+          path: packages/Ksign.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      # Public data only: the CA certificate and the profile that installs it.
+      - name: Upload public trust artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ksign-local-CA-public
+          path: |
+            deps/KsignLocalCA.crt
+            deps/KsignLocalCA.cer
+            deps/KsignLocalCA.mobileconfig
+          if-no-files-found: error
+          retention-days: 30

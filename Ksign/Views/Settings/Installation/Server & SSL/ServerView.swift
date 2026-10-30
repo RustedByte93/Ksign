@@ -6,20 +6,16 @@
 //
 
 import SwiftUI
-import NimbleJSON
 import NimbleViews
 
 struct ServerView: View {
 	@AppStorage("Feather.ipFix") private var _ipFix: Bool = false
-	@AppStorage("Feather.serverMethod") private var _serverMethod: Int = 1
+	@AppStorage("Feather.serverMethod") private var _serverMethod: Int = 0
 	
 	private let _serverMethods: [String] = [
 		.localized("Fully Local"), 
 		.localized("Semi Local")
 	]
-	
-	private let _dataService = NBFetchService()
-	private let _serverPackUrl = "https://backloop.dev/pack.json"
 	
 	var body: some View {
 		Group {
@@ -31,20 +27,17 @@ struct ServerView: View {
 				}
 				Toggle(.localized("Only use localhost address"), systemImage: "lifepreserver", isOn: $_ipFix)
 					.disabled(_serverMethod != 1)
+			} footer: {
+				Text("Fully Local serves the manifest and IPA over HTTPS from this device using the bundled (or your own) TLS certificate. No external service is used. Semi Local needs an external HTTPS manifest proxy.")
 			}
 			
+			// The old "Update SSL Certificates" action downloaded https://backloop.dev/pack.json, which is the
+			// revoked + expired certificate. The certificate is now bundled at build time and validated at launch.
 			Section {
-				Button(.localized("Update SSL Certificates"), systemImage: "arrow.down.doc") {
-					FR.downloadSSLCertificates(from: _serverPackUrl) { success in
-						if !success {
-							DispatchQueue.main.async {
-								UIAlertController.showAlertWithOk(
-									title: .localized("SSL Certificates"),
-									message: .localized("Failed to download, check your internet connection and try again.")
-								)
-							}
-						}
-					}
+				NavigationLink {
+					LocalInstallerDiagnosticsView()
+				} label: {
+					Label("Local Installer Diagnostics", systemImage: "stethoscope")
 				}
 			}
 		}

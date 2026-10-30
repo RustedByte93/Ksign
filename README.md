@@ -7,6 +7,35 @@
 
 Yet another codesigning app, have you ever wondered what if Feather and Esign had a child?
 
+## iOS 27 fix: Fully Local install (this fork)
+
+> Unofficial community fork of [Nyasami/Ksign](https://github.com/Nyasami/Ksign) 1.6.1. It only touches the local installer; the signing engine is unchanged.
+
+**Problem.** "Fully Local" install got stuck on *Ready* and Install could not be tapped:
+- `make` downloaded the TLS certificate from URLs that now return 404, saved the error page as `server.crt` and ignored the failure.
+- The hostname was `*.backloop.dev`, which is not a connectable host.
+- A valid certificate was overwritten on every launch with a revoked one.
+- The server silently fell back to plain HTTP behind an `https://` URL.
+- Even after fixing that, the public backloop.dev certificate is valid for 10 years. Apple rejects it with `-67901` ("not standards compliant"): TLS server certificates may not be valid for more than 825 days. An in-app preflight treated that as fatal, so the server never started.
+
+**Fix.**
+- This fork does **not** use the public backloop.dev certificate. It only uses the *name* `ksign.backloop.dev`, which resolves to `127.0.0.1`, so the iPhone talks to the server running inside the app.
+- `Scripts/make-local-pki.sh` creates your own private CA, name-constrained to `ksign.backloop.dev`, and a 365-day leaf certificate. The CA key stays on your machine (`~/.ksign-pki`), never in the repo or the IPA.
+- You install `KsignLocalCA.mobileconfig` once and enable it under *Settings > General > About > Certificate Trust Settings*. Nothing is installed or trusted automatically.
+- Install is only handed to iOS after a strict HTTPS request to the local server succeeds with normal system trust. No TLS verification is bypassed.
+- IPA streaming from disk with Range support (tested with 250 MB and 500 MB files).
+- *Settings > Installation > Local Installer Diagnostics*: staged self-test (PASS / FAIL / NOT TESTED) and a redacted report export.
+
+**Using it.**
+1. `make` (generates the certificates and builds `packages/Ksign.ipa`), then sign that IPA with your own certificate and install it.
+2. In the app: export the trust profile, install it, and enable it in Certificate Trust Settings. Run *Test System TLS Trust* and wait for PASS.
+3. Install an app. iOS may show a system confirmation popup; confirm it (for example tap Install / Continue) and the installation proceeds.
+4. Keep the app in the foreground while it installs.
+
+**Testing.** 28 automated tests on macOS (`cd Tests/LocalInstaller && swift test`), real TLS handshakes with strict verification, arm64 build. Confirmed working on a physical iPhone running iOS 27.0.1. That is one device; other devices and iOS versions are untested.
+
+**Limitations.** The trust profile is required. The leaf key is inside the IPA, so build with your own CA and do not share your IPA. Details and the root-cause analysis are in [LOCAL_INSTALLER.md](LOCAL_INSTALLER.md).
+
 ## Why?
 Since Esign is end of service so people been moving to other signing apps, but Esign was a really big part of the community, so with the help of Feather as the base app, I tried to recreate Esign as close as possible so you guys can easier to get familiar and less app switching for smooth sideloading.
 

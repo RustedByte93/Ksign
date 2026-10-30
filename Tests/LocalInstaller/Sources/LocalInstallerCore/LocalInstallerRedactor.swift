@@ -1,0 +1,1 @@
+../../../../Ksign/Backend/Server/LocalInstallerRedactor.swift

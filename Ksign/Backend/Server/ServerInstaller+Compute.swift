@@ -60,7 +60,7 @@ extension ServerInstaller {
 
 	var displayImageSmallEndpoint: URL {
 		var comps = URLComponents()
-		comps.scheme = "https"
+		comps.scheme = Self.getServerMethod() == 1 ? "http" : "https"
 		comps.host = Self.sni
 		comps.path = "/app57x57.png"
 		comps.port = port
@@ -69,7 +69,7 @@ extension ServerInstaller {
 
 	var displayImageLargeEndpoint: URL {
 		var comps = URLComponents()
-		comps.scheme = "https"
+		comps.scheme = Self.getServerMethod() == 1 ? "http" : "https"
 		comps.host = Self.sni
 		comps.path = "/app512x512.png"
 		comps.port = port
@@ -93,40 +93,48 @@ extension ServerInstaller {
 		return image.pngData()!
 	}
 
+	/// Landing page opened in Safari. Shows a real, user-tappable install link (iOS is stricter about
+	/// `itms-services` redirects that happen without a user gesture) and also tries the redirect itself.
+	/// Fully Local points at the local HTTPS manifest; Semi Local needs the external HTTPS manifest proxy
+	/// because iOS refuses plain-HTTP manifests.
 	var html: String {
-		"""
-		<html style="background-color: black;">
-		<script type="text/javascript">window.location="\(iTunesLinkExternal)"</script>
+		let link = Self.getServerMethod() == 1 ? iTunesLinkExternal : iTunesLink
+		let href = link
+			.replacingOccurrences(of: "&", with: "&amp;")
+			.replacingOccurrences(of: "\"", with: "&quot;")
+		let title = (app.name ?? "App")
+			.replacingOccurrences(of: "&", with: "&amp;")
+			.replacingOccurrences(of: "<", with: "&lt;")
+			.replacingOccurrences(of: ">", with: "&gt;")
+		return """
+		<!DOCTYPE html>
+		<html>
+		<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>Install \(title)</title>
+		<style>
+		body{background:#000;color:#fff;font-family:-apple-system,sans-serif;text-align:center;padding-top:30vh}
+		a.btn{display:inline-block;margin-top:24px;padding:16px 36px;border-radius:14px;background:#0a84ff;color:#fff;font-size:20px;text-decoration:none}
+		</style>
+		</head>
+		<body>
+		<h2>\(title)</h2>
+		<a class="btn" href="\(href)">Install</a>
+		<script>setTimeout(function(){window.location.href=document.querySelector("a.btn").href;},400)</script>
+		</body>
 		</html>
 		"""
 	}
 
-	var installManifest: [String: Any] {[
-		"items": [[
-			"assets": [
-				[
-					"kind": "software-package",
-					"url": payloadEndpoint.absoluteString,
-				],
-				[
-					"kind": "display-image",
-					"url": "https://raw.githubusercontent.com/Nyasami/Ksign/refs/heads/main/Ksign/Resources/Assets.xcassets/AppIcons/AppIcon.appiconset/Ksign-default.png",
-				],
-			],
-			"metadata": [
-				"bundle-identifier": app.identifier,
-				"bundle-version": app.version,
-				"kind": "software",
-				"title": app.name,
-			],
-		],],
-	]}
-
-	var installManifestData: Data {
-		(try? PropertyListSerialization.data(
-			fromPropertyList: installManifest,
-			format: .xml,
-			options: .zero
-		)) ?? .init()
+	/// Throws instead of serving an empty/invalid manifest (iOS rejects those without any visible reason).
+	func installManifestResult() throws -> Data {
+		try LocalInstallerManifest.make(
+			bundleIdentifier: app.identifier,
+			bundleVersion: app.version,
+			title: app.name,
+			packageURL: payloadEndpoint,
+			displayImageURL: displayImageSmallEndpoint
+		)
 	}
 }

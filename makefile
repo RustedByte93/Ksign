@@ -16,13 +16,7 @@ clean:
 
 deps:
 	rm -rf deps || true
-	mkdir -p deps
-	curl -L -o deps/server.crt https://backloop.dev/backloop.dev-cert.crt || true
-	curl -L -o deps/server.key1 https://backloop.dev/backloop.dev-key.part1.pem || true
-	curl -L -o deps/server.key2 https://backloop.dev/backloop.dev-key.part2.pem || true
-	cat deps/server.key1 deps/server.key2 > deps/server.pem 2>/dev/null || true
-	rm -f deps/server.key1 deps/server.key2
-	echo "*.backloop.dev" > deps/commonName.txt
+	sh Scripts/make-local-pki.sh --out deps
 
 $(SCHEMES): deps
 	xcodebuild \
