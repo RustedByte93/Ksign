@@ -28,9 +28,20 @@ Yet another codesigning app, have you ever wondered what if Feather and Esign ha
 
 **Using it.**
 1. `make` (generates the certificates and builds `packages/Ksign.ipa`), then sign that IPA with your own certificate and install it.
-2. In the app: export the trust profile, install it, and enable it in Certificate Trust Settings. Run *Test System TLS Trust* and wait for PASS.
+2. Trust your local CA once (see [Trusting the local CA](#trusting-the-local-ca-one-time-required) below). Then run *Test System TLS Trust* and wait for PASS.
 3. Install an app. iOS may show a system confirmation popup; confirm it (for example tap Install / Continue) and the installation proceeds.
 4. Keep the app in the foreground while it installs.
+
+### Trusting the local CA (one time, required)
+
+Without this step the iPhone does not trust the local HTTPS server and the install never starts. The file is **not in this repo**: `make` generates `KsignLocalCA.mobileconfig` for you from *your own* CA and puts it inside the IPA. It only lets the phone trust certificates for `ksign.backloop.dev`; it has nothing to do with signing the IPA.
+
+1. In the app: *Settings > Installation > Local Installer Diagnostics > Export Trust Profile*, and save the file to the Files app.
+2. Open `KsignLocalCA.mobileconfig` from Files. iOS shows *Profile Downloaded*; go to *Settings* and tap **Install**.
+3. *Settings > General > About > Certificate Trust Settings*: switch on **Ksign Local Installer CA**.
+4. Back in the app, run *Test System TLS Trust*. It must say PASS before you install anything.
+
+You only need to do this once. Renewing the certificate (it lasts a year) does not need a new profile as long as you keep your CA at `~/.ksign-pki`; if you create a new CA, repeat the steps above.
 
 **Testing.** 28 automated tests on macOS (`cd Tests/LocalInstaller && swift test`), real TLS handshakes with strict verification, arm64 build. Confirmed working on a physical iPhone running iOS 27.0.1. That is one device; other devices and iOS versions are untested.
 
